@@ -5,9 +5,6 @@ from AI.operations import mean, operations
 
 
 if __name__ == "__main__":
-    # method = "__set__"
-    # sig = get_builtin_func_signature(method)
-    # discover_function_from_sig("builtins", "object", method, sig)
     init_exploration()
     print(mean(genint()))
     print(mean(genint()))

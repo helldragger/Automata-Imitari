@@ -294,7 +294,7 @@ def discover_module(module: str) -> None:
     assert module in sys.modules
     for name, children in inspect.getmembers(sys.modules[module]):
         if inspect.isclass(children):
-            discover_object_functions(module, children)
+            discover_object_functions(module, children, [])
         elif check_object_is_function(children):
             if module == "builtins" and name in builtins_class_func_signatures.keys():
                 discover_function_from_sig(module, children.__class__.__name__,
