@@ -15,9 +15,9 @@ def getobjectmodulename(o) -> (str, str):
 
 
 UnknownType = type('UnknownType', (object,), dict())
-setattr(UnknownType, "__str__", lambda self: "UnknownType")
+setattr(UnknownType, "__repr__", lambda self: "UnknownType")
 Self = type('Self', (object,), dict())
-setattr(Self, "__str__", lambda self: "self")
+setattr(Self, "__repr__", lambda self: "self")
 
 
 class Data(type):

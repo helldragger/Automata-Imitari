@@ -1,4 +1,4 @@
-from collections import Collection, Iterable, Sized
+from typing import Collection, Iterable, Sized
 
 
 class Structure(type, Collection):

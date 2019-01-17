@@ -1,10 +1,16 @@
 import inspect
 import sys
 from inspect import Parameter, Signature
-from typing import Optional
+from typing import Collection, Set, Tuple, Union
 
+from AI.caching import get_installed_module_version, is_module_discovered, \
+    is_operation_cached, load_operation_from_cache, register_discovered_module
+from AI.config import debug, verbose
 from AI.datatypes import UnknownType
 from AI.operations import register_operation
+
+
+ignored: Set[Tuple[str, str]] = {("builtins", "__loader__")}
 
 
 def parse_arg(arg: str):
@@ -44,13 +50,13 @@ builtins_class_func_signatures = {
     "__str__":           "__str__(self) -> str",
     "__bytes__":         "__bytes__(self) -> bytes",
     "__format__":        "__format__(self, format_spec) -> str",
-    "__lt__":            "__lt__(self, other:object) -> Optional[bool]",
-    "__le__":            "__le__(self, other:object) -> Optional[bool]",
-    "__eq__":            "__eq__(self, other:object) -> Optional[bool]",
-    "__ne__":            "__ne__(self, other:object) -> Optional[bool]",
-    "__gt__":            "__gt__(self, other:object) -> Optional[bool]",
-    "__ge__":            "__ge__(self, other:object) -> Optional[bool]",
-    "__hash__":          "__hash__(self) -> Optional[int]",
+    "__lt__":            "__lt__(self, other:object) -> bool",
+    "__le__":            "__le__(self, other:object) -> bool",
+    "__eq__":            "__eq__(self, other:object) -> bool",
+    "__ne__":            "__ne__(self, other:object) -> bool",
+    "__gt__":            "__gt__(self, other:object) -> bool",
+    "__ge__":            "__ge__(self, other:object) -> bool",
+    "__hash__":          "__hash__(self) -> int",
     "__bool__":          "__bool__(self) -> bool",
     "__getattr__":       "__getattr__(self, name:str) -> Optional[object]",
     "__getattribute__":  "__getattribute__(self, name:str) -> Optional[object]",
@@ -171,85 +177,145 @@ def get_function_signature(func: classmethod) -> Signature:
     return sig
 
 
-def get_function_return_type(func: classmethod) -> type:
+def get_function_return_type(func: classmethod) -> Collection[type]:
     return get_function_return_type_from_sig(get_function_signature(func))
 
 
 def get_function_param_types(func: classmethod) -> {
-    str: type
+    str: Collection[type]
 }:
     return get_function_param_types_from_sig(get_function_signature(func))
 
 
-def get_function_return_type_from_sig(sig: Signature) -> Optional[type]:
+def get_function_return_type_from_sig(sig: Signature) -> Collection[type]:
     type_ = sig.return_annotation
     if type_ is None:
-        return None
+        return []
     elif type_ is sig.empty:
-        return sig.empty
+        return [sig.empty]
     elif not inspect.isclass(type_) or not isinstance(type_, type):
-        return UnknownType
-    else:
+        return [UnknownType]
+    elif type_ is Union:
         return type_
+    else:
+        return [type_]
 
 
 def get_function_param_types_from_sig(sig: Signature) -> {
-    str: type
+    str: Collection[type]
 }:
     args = {}
     params = sig.parameters
     for param in params.values():
         type_ = param.annotation
         if type_ is param.empty and not inspect.isclass(type_):
-            args[param.name] = UnknownType()
+            args[param.name] = [UnknownType()]
         elif param.default is not param.empty:
-            args[param.name] = type(param.default)
+            args[param.name] = [type(param.default)]
         elif type_ is inspect._empty:
             continue
-        else:
+        elif type_ is Union:
             args[param.name] = type_
+        else:
+            args[param.name] = [type_]
     return args
 
 
-def discover_function_from_sig(module: str, class_: str, method: str,
+def discover_function_from_sig(module: str, version: str, class_: str,
+                               method: str,
                                sig: Signature) -> None:
     assert module in sys.modules
-    register_operation(module, class_, method, class_)
+    register_operation(module, version, class_, method, class_)
     try:
         paramtypes = get_function_param_types_from_sig(sig)
         returntype = get_function_return_type_from_sig(sig)
     except Exception as e:
-        print(module, class_, e)
-
+        if debug:
+            print(module, version, class_, e)
         return
+
     for param_name in paramtypes.keys():
-        register_operation(module, class_, method, paramtypes[param_name],
-                           var_name=param_name)
-    if returntype != None:
-        register_operation(module, class_, method, returntype.__name__,
+        for param_type in paramtypes[param_name]:
+            try:
+                param_repr = param_type.__repr__()
+            except:
+                try:
+                    param_repr = param_type.__name__
+                except Exception as e2:
+                    if debug:
+                        print("Error while trying to parse type name",
+                              param_type, e2)
+                    continue
+            register_operation(module, version, class_, method, param_repr,
+                               var_name=param_name)
+    for param_type in returntype:
+        try:
+            param_repr = param_type.__repr__()
+        except:
+            try:
+                param_repr = param_type.__name__
+            except Exception as e2:
+                if debug:
+                    print("Error while trying to parse type name", param_type,
+                          e2)
+                continue
+        register_operation(module, version, class_, method, param_repr,
                            var_name="__return_type__")
+
     return
 
 
-def discover_function(module: str, class_: str, method) -> None:
+def get_method_name(method: classmethod):
+    try:
+        return method.__name__
+    except:
+        return method.__repr__()
+
+
+def discover_function(module: str, version: str, class_: str, method) -> None:
     assert inspect.isfunction(method) or inspect.ismethod(
         method) or inspect.ismethoddescriptor(method)
     assert module in sys.modules
-    register_operation(module, class_, method.__name__, class_)
+
+    register_operation(module, version, class_, get_method_name(method), class_)
     try:
         paramtypes = get_function_param_types(method)
         returntype = get_function_return_type(method)
     except Exception as e:
-        print(module, class_, e)
+        if debug:
+            print(module, version, class_, e)
 
         return
     for param_name in paramtypes.keys():
-        register_operation(module, class_, method.__name__,
-                           paramtypes[param_name], var_name=param_name)
-    if returntype != None:
-        register_operation(module, class_, method.__name__, returntype.__name__,
-                           var_name="__return_type__")
+        for param_type in paramtypes[param_name]:
+            try:
+                param_repr = param_type.__repr__()
+            except:
+                try:
+                    param_repr = param_type.__name__
+                except Exception as e2:
+                    if debug:
+                        print("Error while trying to parse type name",
+                              param_type, e2)
+                    continue
+            register_operation(module, version, class_, get_method_name(method),
+                               param_repr, var_name=param_name)
+    for param_type in returntype:
+        try:
+            param_repr = param_type.__repr__()
+        except:
+            try:
+                param_repr = param_type.__name__
+            except Exception as e2:
+                if debug:
+                    print("Error while trying to parse type name", param_type,
+                          e2)
+                continue
+
+        register_operation(module, version, class_, get_method_name(method),
+                           param_repr, var_name="__return_type__")
     return
+
 
 
 def choose_class_name(class_: type, obj: object) -> str:
@@ -264,51 +330,83 @@ def check_object_is_function(obj: object):
         obj) or inspect.ismethoddescriptor(obj)
 
 
-def discover_object_functions(module: str, class_: type,
+def discover_object_functions(module: str, version: str, class_: type,
                               parents: [type]) -> None:
     assert inspect.isclass(class_)
     assert module in sys.modules
-
     for children_name, children in inspect.getmembers(class_):
         if inspect.isclass(children):
             if children in parents:
                 continue
             parents.append(class_)
-            discover_object_functions(module, children, parents)
+            discover_object_functions(module, version, children, parents)
             parents.pop()
         elif check_object_is_function(children):
             name = choose_class_name(class_, children)
-
+            if is_operation_cached(module, version, name, children_name):
+                load_operation_from_cache(module, version, name, children_name)
+                continue
             if module == "builtins" and children_name in builtins_class_func_signatures.keys():
-                discover_function_from_sig(module, name, children_name,
+                discover_function_from_sig(module, version, name, children_name,
                                            get_builtin_func_signature(
                                                children_name))
             else:
-                discover_function(module, name, children)
+                discover_function(module, version, name, children)
         else:
             # TODO implement more data exploration
             continue
 
 
 def discover_module(module: str) -> None:
+    try:
+        version = get_installed_module_version(module)
+    except Exception as e:
+        return
+
+    if is_module_discovered(module):
+        if verbose:
+            print("Already discovered ", module, version)
+        return
+    if verbose:
+        print("Discovering module ", module)
     assert module in sys.modules
-    for name, children in inspect.getmembers(sys.modules[module]):
-        if inspect.isclass(children):
-            discover_object_functions(module, children, [])
-        elif check_object_is_function(children):
-            if module == "builtins" and name in builtins_class_func_signatures.keys():
-                discover_function_from_sig(module, children.__class__.__name__,
-                                           name,
-                                           get_builtin_func_signature(name))
+    try:
+        for name, children in inspect.getmembers(sys.modules[module]):
+            if (module, name) in ignored:
+                if verbose:
+                    print("\tIgnoring ", module, name)
+                continue
             else:
-                discover_function(module, children.__class__.__name__, children)
-        else:
-            # TODO implement more data exploration
-            continue
+                if verbose:
+                    print("\tExploring ", module, name)
+            if inspect.isclass(children):
+                discover_object_functions(module, version, children, [])
+            elif check_object_is_function(children):
+                if is_operation_cached(module, version, "", name):
+                    load_operation_from_cache(module, version, "", name)
+                    continue
+                if module == "builtins" and name in builtins_class_func_signatures.keys():
+                    discover_function_from_sig(module, version,
+                                               children.__class__.__name__,
+                                               name,
+                                               get_builtin_func_signature(name))
+                else:
+                    discover_function(module, version,
+                                      children.__class__.__name__, children)
+            else:
+                # TODO implement more data exploration
+                continue
+        register_discovered_module(module, version)
+    except:
+        pass
+
 
 
 def init_exploration():
-    discover_module("builtins")
-    for type_ in [int, float, complex, bool, str, list, set, dict, tuple, range,
-                  frozenset, str, bytes, bytearray, memoryview]:
-        discover_object_functions("builtins", type_, [])
+    if not is_module_discovered("builtins"):
+        for type_ in [int, float, complex, bool, str, list, set, dict, tuple,
+                      range, frozenset, str, bytes, bytearray, memoryview]:
+            discover_object_functions("builtins",
+                                      get_installed_module_version("builtins"),
+                                      type_, [])
+        discover_module("builtins")
