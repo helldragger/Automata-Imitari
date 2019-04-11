@@ -1,4 +1,4 @@
-# Automata-Imitari
+# Imatari-Automata
 Trying to automate algorithm generation from any source data set to any goal data set
 
 # what is this project?
